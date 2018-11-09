@@ -1,12 +1,16 @@
 import warnings
 import numpy as np
 
+from .observer import ScreenLogger
 from .target_space import TargetSpace
-from .observer import Observable, Events
-from .helpers import UtilityFunction, acq_max, ensure_rng
+from .event import Events, DEFAULT_EVENTS
+from .util import UtilityFunction, acq_max, ensure_rng
 
 from sklearn.gaussian_process.kernels import Matern
 from sklearn.gaussian_process import GaussianProcessRegressor
+
+
+_default_logger = ScreenLogger()
 
 
 class Queue:
@@ -32,6 +36,28 @@ class Queue:
         self._queue.append(obj)
 
 
+class Observable:
+    def __init__(self, events):
+        # maps event names to subscribers
+        # str -> dict
+        self._events = {event: dict() for event in events}
+
+    def get_subscribers(self, event):
+        return self._events[event]
+
+    def subscribe(self, event, subscriber, callback=None):
+        if callback == None:
+            callback = getattr(subscriber, 'update')
+        self.get_subscribers(event)[subscriber] = callback
+
+    def unsubscribe(self, event, subscriber):
+        del self.get_subscribers(event)[subscriber]
+
+    def dispatch(self, event):
+        for _, callback in self.get_subscribers(event).items():
+            callback(event, self)
+
+
 class BayesianOptimization(Observable):
     def __init__(self, f, pbounds, random_state=None, verbose=1):
         """"""
@@ -53,7 +79,12 @@ class BayesianOptimization(Observable):
             random_state=self._random_state,
         )
 
-        super(BayesianOptimization, self).__init__(events=None)
+        # Keep track of how many times the function was probed
+        self._total_iterations = 0
+
+        self._verbose = verbose
+
+        super(BayesianOptimization, self).__init__(events=DEFAULT_EVENTS)
 
     @property
     def space(self):
@@ -77,6 +108,8 @@ class BayesianOptimization(Observable):
             self._queue.add(x)
         else:
             self._space.probe(x)
+            self._total_iterations += 1
+            self.dispatch(Events.PROBE_STEP)
 
     def suggest(self, utility_function):
         """Most promissing point to probe next"""
@@ -113,7 +146,14 @@ class BayesianOptimization(Observable):
                  xi: float=0.0,
                  **gp_params):
         """Mazimize your function"""
+        if not any([len(subs) for subs in self._events.values()]):
+            _default_logger.verbose = self._verbose
+            self.subscribe(Events.MAXIMIZE_START, _default_logger)
+            self.subscribe(Events.PROBE_STEP, _default_logger)
+            self.subscribe(Events.MAXIMIZE_END, _default_logger)
+
         self._prime_queue(init_points)
+        self.dispatch(Events.MAXIMIZE_START)
 
         util = UtilityFunction(kind=acq, kappa=kappa, xi=xi)
         iteration = 0
@@ -127,7 +167,7 @@ class BayesianOptimization(Observable):
             self.probe(x_probe, lazy=False)
 
         # Notify about finished optimization
-        self.dispatch(Events.FIT_DONE)
+        self.dispatch(Events.MAXIMIZE_END)
 
     def set_bounds(self, new_bounds):
         """
