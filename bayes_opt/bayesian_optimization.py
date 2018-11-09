@@ -10,9 +10,6 @@ from sklearn.gaussian_process.kernels import Matern
 from sklearn.gaussian_process import GaussianProcessRegressor
 
 
-_default_logger = ScreenLogger()
-
-
 class Queue:
     def __init__(self):
         self._queue = []
@@ -37,6 +34,11 @@ class Queue:
 
 
 class Observable:
+    """
+
+    Inspired/Taken from
+        https://www.protechtraining.com/blog/post/879#simple-observer
+    """
     def __init__(self, events):
         # maps event names to subscribers
         # str -> dict
@@ -79,11 +81,7 @@ class BayesianOptimization(Observable):
             random_state=self._random_state,
         )
 
-        # Keep track of how many times the function was probed
-        self._total_iterations = 0
-
         self._verbose = verbose
-
         super(BayesianOptimization, self).__init__(events=DEFAULT_EVENTS)
 
     @property
@@ -108,8 +106,6 @@ class BayesianOptimization(Observable):
             self._queue.add(x)
         else:
             self._space.probe(x)
-            self._total_iterations += 1
-            self.dispatch(Events.PROBE_STEP)
 
     def suggest(self, utility_function):
         """Most promissing point to probe next"""
@@ -138,6 +134,13 @@ class BayesianOptimization(Observable):
         for _ in range(init_points):
             self._queue.add(self._space.random_sample())
 
+    def _prime_subscriptions(self):
+        if not any([len(subs) for subs in self._events.values()]):
+            default_logger = ScreenLogger(verbose=self._verbose)
+            self.subscribe(Events.OPTMIZATION_START, default_logger)
+            self.subscribe(Events.OPTMIZATION_STEP, default_logger)
+            self.subscribe(Events.OPTMIZATION_END, default_logger)
+
     def maximize(self,
                  init_points: int=5,
                  n_iter: int=25,
@@ -146,14 +149,9 @@ class BayesianOptimization(Observable):
                  xi: float=0.0,
                  **gp_params):
         """Mazimize your function"""
-        if not any([len(subs) for subs in self._events.values()]):
-            _default_logger.verbose = self._verbose
-            self.subscribe(Events.MAXIMIZE_START, _default_logger)
-            self.subscribe(Events.PROBE_STEP, _default_logger)
-            self.subscribe(Events.MAXIMIZE_END, _default_logger)
-
+        self._prime_subscriptions()
+        self.dispatch(Events.OPTMIZATION_START)
         self._prime_queue(init_points)
-        self.dispatch(Events.MAXIMIZE_START)
 
         util = UtilityFunction(kind=acq, kappa=kappa, xi=xi)
         iteration = 0
@@ -165,9 +163,10 @@ class BayesianOptimization(Observable):
                 iteration += 1
 
             self.probe(x_probe, lazy=False)
+            self.dispatch(Events.OPTMIZATION_STEP)
 
         # Notify about finished optimization
-        self.dispatch(Events.MAXIMIZE_END)
+        self.dispatch(Events.OPTMIZATION_END)
 
     def set_bounds(self, new_bounds):
         """

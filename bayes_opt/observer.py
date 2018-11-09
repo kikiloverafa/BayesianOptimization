@@ -1,15 +1,35 @@
 """
-
-
-Inspired/Taken from https://www.protechtraining.com/blog/post/879#simple-observer
+observers...
 """
+import os
+import json
 from datetime import datetime
 from .event import Events
 
 
-class ScreenLogger:
+class _Clock:
+    def __init__(self):
+        self._start_time = None
+        self._previous_time = None
+
+    def _time_metrics(self):
+        now = datetime.now()
+        if self._start_time is None:
+            self._start_time = now
+        if self._previous_time is None:
+            self._previous_time = now
+
+        time_elapsed = now - self._start_time
+        time_delta = now - self._previous_time
+
+        self._previous_time = now
+        return time_elapsed.total_seconds(), time_delta.total_seconds()
+
+
+class ScreenLogger(_Clock):
     def __init__(self, verbose=0):
         self._verbose = verbose
+        super(ScreenLogger, self).__init__()
 
     @property
     def verbose(self):
@@ -20,14 +40,38 @@ class ScreenLogger:
         self._verbose = v
 
     def update(self, event, instance):
-        if event == Events.MAXIMIZE_START:
+        if event == Events.OPTMIZATION_START:
             print("Optimization has started.")
-        elif event == Events.PROBE_STEP:
+        elif event == Events.OPTMIZATION_STEP:
             print("Optimization step finished, current max: ",
                   instance.max)
-        elif event == Events.MAXIMIZE_END:
+        elif event == Events.OPTMIZATION_END:
             print("Optimization finished, maximum value at: ",
                   instance.max)
+
+
+class JSONLogger(_Clock):
+    def __init__(self, path):
+        self._path = path if path[-5:] == ".json" else path + ".json"
+        try:
+            os.remove(self._path)
+        except OSError:
+            pass
+
+        super(JSONLogger, self).__init__()
+
+    def update(self, event, instance):
+        if event == Events.OPTMIZATION_STEP:
+            data = dict(instance.res[-1])
+
+            time_elapsed, time_delta = self._time_metrics()
+            data["time"] = {
+                "elapsed": time_elapsed,
+                "delta": time_delta,
+            }
+
+            with open(self._path, "a") as f:
+                f.write(json.dumps(data) + "\n")
 
 
 # class PrintLog(object):
